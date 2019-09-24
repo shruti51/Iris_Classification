@@ -1,0 +1,333 @@
+---
+title: "Project on Iris Dataset"
+output: html_notebook
+---
+
+
+```{r}
+library(datasets)
+
+data(iris) 
+summary(iris)
+
+
+```
+
+```{r}
+dat = iris
+str(dat)
+```
+
+```{r}
+levels(dat$Species)
+percentage <- prop.table(table(dat$Species)) * 100
+cbind(freq=table(dat$Species), percentage=percentage)
+
+```
+
+Data Visualization
+```{r}
+x = dat[1:4]
+y = dat[5]
+plot(y)
+# boxplot for each attribute on one image
+par(mfrow=c(1,4))
+  for(i in 1:4) {
+  boxplot(x[,i], main=names(iris)[i])
+  }
+```
+
+
+```{r}
+dat
+pairs(dat)
+```
+
+```{r}
+hist(dat$Sepal.Length)
+plot(density(dat$Sepal.Length))
+hist(dat$Sepal.Width)
+plot(density(dat$Sepal.Width))
+hist(dat$Petal.Length)
+plot(density(dat$Petal.Length))
+hist(dat$Petal.Width)
+plot(density(dat$Petal.Width))
+hist(dat$Sepal.Length + dat$Sepal.Width+dat$Petal.Length + dat$Petal.Width)
+plot(density(dat$Sepal.Length + dat$Sepal.Width+dat$Petal.Length + dat$Petal.Width))
+
+```
+
+
+```{r}
+boxplot(Sepal.Length+Sepal.Width+Petal.Length + Petal.Width ~ Species, data = dat)
+boxplot(Sepal.Length~Species, data = dat)
+```
+
+Model: Gaussian mixture model:
+When we fit a mixture model to data, we usually have the $y$ values and do 
+not know which 'population' they belong to. The hierarchical model looks like:
+\[y_{i}|z_i,\theta \sim \mathcal{N}_{z_i}(\mu_{z_i},\sigma^2), \hspace{0.5cm} i = 1,\dots,n\]
+
+```{r}
+y = dat$Sepal.Length + dat$Sepal.Width + dat$Petal.Length+ dat$Petal.Width
+y
+(n = length(y))
+```
+
+
+```{r}
+#jpeg("rplot.jpg", width = 350, height = "350")
+hist(y,breaks = 20)
+```
+
+```{r}
+plot(density(y))
+```
+
+It appears that we have two populations, but in reality there are three populations each observation belongs to. We will assume three latent variables corresponding to three different species. We will learn them, along with the mixture weights and population-specific parameters with a Bayesian hierarchical model.
+
+We will use a mixture of three normal distributions with variance 1 and different (and unknown means).
+
+Modeling using RJAGS:
+```{r}
+library("rjags")
+
+mod_string = "model{
+  for (i in 1:length(y)){
+    y[i] ~ dnorm(mu[z[i]],prec)
+    z[i] ~ dcat(omega)
+  }
+  
+  mu[1] ~ dnorm(-1,1.0/100.0)
+  mu[2] ~ dnorm(0,1.0/100.0) T(mu[1],)
+  mu[3] ~ dnorm(1, 1.0/100.0) T(mu[2],)
+  
+  prec ~ dgamma(1.0/2.0, 1.0*1.0/2.0)
+  sig = sqrt(1.0/prec)
+  
+  omega ~ ddirich(c(1.0,1.0,1.0))
+
+}"
+```
+
+```{r}
+set.seed(100)
+
+data_jags = list(y = y)
+# params = c("mu", "sig", "omega", "z[10]", "z[78]", "z[90]","z[104]", " z[115]", "z[121]", "z[82]")
+params  = c("mu","sig", "omega", "z")
+mod = jags.model(textConnection(mod_string), data = data_jags, n.chains = 3)
+update(mod,1e3)
+
+mod_sim = coda.samples(model = mod, variable.names = params, n.iter = 5e3)
+
+mod_csim = as.mcmc(do.call(rbind,mod_sim))
+```
+
+```{r}
+densplot(mod_csim[,c("z[1]", "z[150]")])
+```
+```{r}
+(pm_coeff = colMeans(mod_csim))
+```
+```{r}
+(a = pm_coeff[8:57])
+(a_tab = a>0.5 & a<1.5)
+table(a_tab)
+
+(b = pm_coeff[58:107])
+(b_tab = b>1.5 & b<2.5)
+table(b_tab)
+
+(c = pm_coeff[108:157])
+(c_tab = c>2.5 & c<3.5)
+table(c_tab)
+```
+
+
+
+```{r}
+plot(mod_sim)
+```
+
+
+
+```{r}
+summary(mod_sim)
+```
+
+Convergence Analysis:
+```{r}
+autocorr.plot(mod_sim)
+```
+
+```{r}
+effectiveSize(mod_sim)
+```
+
+For the population parameters and the mixing weights:
+
+```{r}
+par(mfrow = c(3,3))
+densplot(mod_csim[,c("mu[1]","mu[2]","mu[3]","omega[1]","omega[2]","omega[3]","sig")])
+```
+
+```{r}
+table(mod_csim[,"z[82]"])/nrow(mod_csim)
+```
+
+
+
+# Hierarchical Modeling:
+
+```{r}
+mod_string_h = "model{
+  for (i in 1:length(y)){
+    y[i] ~ dnorm(mu[spec[i]],prec)
+  }
+  
+  mu[1] ~ dnorm(-1,1.0/100.0)
+  mu[2] ~ dnorm(0,1.0/100.0) T(mu[1],)
+  mu[3] ~ dnorm(1, 1.0/100.0) T(mu[2],)
+  
+  prec ~ dgamma(1.0/2.0, 1.0*1.0/2.0)
+  sig = sqrt(1.0/prec)
+  
+}"
+```
+
+```{r}
+str(dat)
+spec = as.numeric(dat$Species)
+```
+
+```{r}
+data_jags_h = list(y=y, spec = spec)
+params = c("mu", "sig")
+
+mod_h = jags.model(textConnection(mod_string_h),data = data_jags_h, n.chains = 3)
+update(mod_h, 1e3)
+mod_h_sim = coda.samples(model = mod_h, variable.names = params, n.iter = 5e3)
+mod_h_csim = as.mcmc(do.call(rbind, mod_h_sim))
+```
+
+Convergence Diagnostics:
+```{r}
+plot(mod_h_sim)
+
+```
+
+
+```{r}
+gelman.diag(mod_h_sim)
+```
+
+```{r}
+effectiveSize(mod_h_sim)
+```
+
+```{r}
+(dic_h = dic.samples(mod_h, n.iter = 1e3))
+(dic_mm = dic.samples(mod, n.iter = 1e3))
+```
+
+
+Summary of the model:
+```{r}
+summary(mod_h_sim)
+```
+
+#### Model Checking:
+We can check the fit via residuals. With hierarchical model, there are now two levels of residuals: the observation level and the location mean level. To simplify, we'll look at the residuals associcated with the posterior means of the parameters.
+
+```{r}
+(pm_coeff_h = colMeans(mod_h_csim))
+summary(mod_h_csim)
+
+```
+
+```{r}
+yhat = rep(pm_coeff_h[1:3],each = 50)
+
+resid = y - yhat
+plot(resid)
+
+```
+```{r}
+plot(jitter(yhat),resid)
+
+```
+
+```{r}
+(n_sim = nrow(mod_h_csim))
+mu_pred_1 = rnorm(n=n_sim, mean = mod_csim[,"mu[1]"],sd = mod_csim[,"sig"])
+hist(mu_pred_1)
+plot(density(mu_pred_1))
+mu_pred_2 = rnorm(n=n_sim, mean = mod_csim[,"mu[2]"],sd = mod_csim[,"sig"])
+hist(mu_pred_2)
+plot(density(mu_pred_2))
+
+mu_pred_3 = rnorm(n=n_sim, mean = mod_csim[,"mu[3]"],sd = mod_csim[,"sig"])
+hist(mu_pred_3)
+plot(density(mu_pred_3))
+
+```
+
+
+
+```{r}
+y_pred = rnorm(n = 1500, mean = pm_coeff_h[1],sd = pm_coeff_h[4])
+hist(y_pred)
+```
+```{r}
+plot(density(y_pred))
+
+```
+
+
+What is the posterior probability that the next value would correspond to species 3?
+```{r}
+y_pred_3 = rnorm(n = n_sim, mean = mod_csim[,"mu[3]"],sd = mod_csim[,"sig"])
+hist(y_pred_3)
+mean(y_pred_3<17)
+```
+
+
+
+# Multinomial Logistic Regression:
+
+```{r}
+library("nnet")
+model_lr = multinom(Species ~ Sepal.Length + Sepal.Width + Petal.Length + Petal.Width , data = dat)
+```
+```{r}
+summary(model_lr)
+```
+
+```{r}
+X = model.matrix(model_lr)
+head(X[,c(2:5)])
+```
+
+```{r}
+(coefs = coef(model_lr))
+log_Pph21 = coefs[1,1] + X[,c(2:5)] %*% coefs[1,2:5]      # eta_2
+log_Pph31 = coefs[2,1] + X[,c(2:5)] %*% coefs[2,2:5]      # eta_3
+
+```
+
+Classification Accuracy Computation and Confusion Matrix
+```{r}
+phi2 = exp(log_Pph21)/(1+exp(log_Pph21)+exp(log_Pph31))
+phi3 = exp(log_Pph31)/(1+exp(log_Pph21)+exp(log_Pph31))
+phi1 = 1/(1+exp(log_Pph21)+exp(log_Pph31))
+Species_1 = phi1[1:50]>0.7 & phi1[1:50]<1
+table(Species_1)
+
+Species_2 = phi2[51:100]>0.7 & phi1[51:100]<1
+table(Species_2)
+
+Species_3 = phi3[101:150]>0.7 & phi1[101:150]<1
+table(Species_3)
+```
+
